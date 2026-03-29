@@ -2214,14 +2214,23 @@ class STTUpdateSettingsFrame(ServiceUpdateSettingsFrame):
 class UserIdleTimeoutUpdateFrame(SystemFrame):
     """Frame for updating the user idle timeout at runtime.
 
-    Setting timeout to 0 disables idle detection. Setting a positive value
+    Setting ``timeout`` to 0 disables idle detection. Setting a positive value
     enables it.
+
+    Setting ``reset`` to True ignores ``timeout`` and restores the timeout to
+    the value the controller was initialised with. If the current state warrants
+    it (bot not speaking, user not mid-turn, no pending function calls) the idle
+    timer is started immediately after restoring.
 
     Parameters:
         timeout: The new idle timeout in seconds. 0 disables idle detection.
+            Ignored when ``reset`` is True.
+        reset: If True, restore the initial timeout instead of applying
+            ``timeout``.
     """
 
-    timeout: float
+    timeout: float = 0
+    reset: bool = False
 
 
 @dataclass

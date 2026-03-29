@@ -4,6 +4,8 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
+"""Unit tests for UserIdleController."""
+
 import asyncio
 import unittest
 import unittest.mock
@@ -15,6 +17,7 @@ from pipecat.frames.frames import (
     FunctionCallsStartedFrame,
     UserIdleTimeoutUpdateFrame,
     UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.turns.user_idle_controller import UserIdleController
 from pipecat.utils.asyncio.task_manager import TaskManager, TaskManagerParams
@@ -315,6 +318,82 @@ class TestUserIdleController(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(USER_IDLE_TIMEOUT + 0.1)
 
         self.assertFalse(idle_triggered)
+
+        await controller.cleanup()
+
+    async def test_reset_restores_timeout_and_starts_timer(self):
+        """Test that reset=True restores the initial timeout and starts the timer when bot is already silent."""
+        controller = UserIdleController(user_idle_timeout=USER_IDLE_TIMEOUT)
+        await controller.setup(self.task_manager)
+
+        idle_count = 0
+
+        @controller.event_handler("on_user_turn_idle")
+        async def on_user_turn_idle(controller):
+            nonlocal idle_count
+            idle_count += 1
+
+        # Disable detection, bot stops (timer suppressed), verify no idle fires
+        await controller.process_frame(UserIdleTimeoutUpdateFrame(timeout=0))
+        await controller.process_frame(BotStoppedSpeakingFrame())
+        await asyncio.sleep(USER_IDLE_TIMEOUT + 0.1)
+        self.assertEqual(idle_count, 0)
+
+        # Reset — bot is already silent so timer starts immediately
+        await controller.process_frame(UserIdleTimeoutUpdateFrame(reset=True))
+        await asyncio.sleep(USER_IDLE_TIMEOUT + 0.1)
+        self.assertEqual(idle_count, 1)
+
+        await controller.cleanup()
+
+    async def test_reset_with_initial_zero_is_noop(self):
+        """Test that reset=True when the initial timeout was 0 does not fire the idle event."""
+        controller = UserIdleController(user_idle_timeout=0)
+        await controller.setup(self.task_manager)
+
+        idle_triggered = False
+
+        @controller.event_handler("on_user_turn_idle")
+        async def on_user_turn_idle(controller):
+            nonlocal idle_triggered
+            idle_triggered = True
+
+        await controller.process_frame(BotStoppedSpeakingFrame())
+        await controller.process_frame(UserIdleTimeoutUpdateFrame(reset=True))
+        await asyncio.sleep(USER_IDLE_TIMEOUT + 0.1)
+        self.assertFalse(idle_triggered)
+
+        await controller.cleanup()
+
+    async def test_reset_during_user_turn_waits_for_next_bot_stop(self):
+        """Test that reset=True during a user turn defers the timer until the next BotStoppedSpeakingFrame."""
+        controller = UserIdleController(user_idle_timeout=USER_IDLE_TIMEOUT)
+        await controller.setup(self.task_manager)
+
+        idle_triggered = False
+
+        @controller.event_handler("on_user_turn_idle")
+        async def on_user_turn_idle(controller):
+            nonlocal idle_triggered
+            idle_triggered = True
+
+        # Disable detection and start a user turn
+        await controller.process_frame(UserIdleTimeoutUpdateFrame(timeout=0))
+        await controller.process_frame(UserStartedSpeakingFrame())
+
+        # Restore while user is still speaking — should not start yet
+        await controller.process_frame(UserIdleTimeoutUpdateFrame(reset=True))
+        await controller.process_frame(UserStoppedSpeakingFrame())
+
+        # User stopped but bot hasn't spoken yet — timer should not fire
+        await asyncio.sleep(USER_IDLE_TIMEOUT + 0.1)
+        self.assertFalse(idle_triggered)
+
+        # Bot speaks and stops — timer starts now
+        await controller.process_frame(BotStartedSpeakingFrame())
+        await controller.process_frame(BotStoppedSpeakingFrame())
+        await asyncio.sleep(USER_IDLE_TIMEOUT + 0.1)
+        self.assertTrue(idle_triggered)
 
         await controller.cleanup()
 
